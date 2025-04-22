@@ -84,7 +84,16 @@ function M._display_next_suggestion(edits, ns_id)
         return
     end
     local bufnr = vim.uri_to_bufnr(edits[1].textDocument.uri)
-    local win_id = vim.fn.win_findbuf(bufnr)[1]
+    local cur_bufnr = vim.api.nvim_get_current_buf()
+    -- NOTE: keeping it simple, only allowing suggestions in the current buffer
+    if bufnr ~= cur_bufnr then
+        vim.notify("NES suggestion is not in current buffer... aborting!", vim.log.levels.WARN)
+        return
+    end
+    -- local win_id = vim.fn.win_findbuf(bufnr)[1]
+    -- NOTE: using active Window to avoid getting win_id from another vim tabpage
+    local win_id = vim.api.nvim_get_current_win()
+
     local suggestion = edits[1]
 
     local ui = {}
