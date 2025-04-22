@@ -54,7 +54,8 @@ return {
             require("copilot-lsp.nes").request_nes,
             vim.g.copilot_nes_debounce or 500
         )
-        vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
+        -- vim.api.nvim_create_autocmd({ "TextChangedI", "TextChanged" }, {
+        vim.api.nvim_create_autocmd({ "TextChanged", "InsertLeave" }, {
             callback = function()
                 debounced_request(client)
             end,
