@@ -45,36 +45,48 @@ function M.recall_last_suggestion()
         vim.notify("No NES suggestion to recall.", vim.log.levels.INFO)
         return
     end
+
     local current_buf = vim.api.nvim_get_current_buf()
-    -- Find next applicable suggestion cycling through history
     local start_idx = nes_recall_index or 1
     local idx = start_idx
-    local tried = 0
-    while tried < #history do
+    local history_len = #history
+    local checked = 0
+
+    while checked < history_len and #history > 0 do
         local candidate = history[idx]
+        -- Only consider suggestions from current buffer
         if candidate and candidate.bufnr == current_buf then
-            -- Get current text at suggestion's edit range
             local candidate_edit = candidate.edits[1]
             local current_text = get_buffer_text_at_edit(candidate_edit, current_buf)
-            -- Only recall if content has not changed
             if current_text == candidate.original_text then
-                -- vim.notify("[NES Recall Debug] idx=" .. idx .. " payload:\n" .. vim.inspect(candidate), vim.log.levels.INFO)
+                -- Found a valid suggestion
                 nes_recall_index = idx % #history + 1
                 local ns_id = vim.api.nvim_create_namespace("copilotlsp.nes")
                 nes_ui._display_next_suggestion(candidate.bufnr, ns_id, vim.deepcopy(candidate.edits))
                 return
             else
-                -- If content has changed, remove from history
-                vim.notify("[NES Recall Debug] Removing history idx=" .. idx .. ": original content diverged\nOriginal: " .. (candidate.original_text or "nil") .. "\nCurrent: " .. (current_text or "nil"), vim.log.levels.INFO)
+                -- Content has changed, remove this entry
                 table.remove(history, idx)
-                -- Don't increment idx, just try new entry at this index
-                if idx > #history then idx = 1 end
+                if #history == 0 then
+                    break -- List empty, exit
+                end
+                if idx > #history then
+                    idx = 1 -- Wrap
+                end
+                -- continue; don't increment checked since we want to check the new item now at idx
+                history_len = #history -- Update how many items we must check
             end
         else
             idx = idx % #history + 1
+            checked = checked + 1
         end
-        tried = tried + 1
+
+        if #history > 0 and idx == start_idx then
+            -- Made a full loop, bail out
+            break
+        end
     end
+
     vim.notify("No NES suggestion to recall in this buffer.", vim.log.levels.INFO)
 end
 
