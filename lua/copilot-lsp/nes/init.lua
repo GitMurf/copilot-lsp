@@ -6,6 +6,78 @@ local M = {}
 
 local nes_ns = vim.api.nvim_create_namespace("copilotlsp.nes")
 
+local nes_recent_suggestions = {}
+local nes_recall_index = nil
+local nes_recent_history_depth = 5
+
+---Returns the text content at the given edit range in the buffer as it currently exists.
+local function get_buffer_text_at_edit(edit, bufnr)
+    local lines = vim.api.nvim_buf_get_lines(
+        bufnr,
+        edit.range.start.line,
+        edit.range["end"].line + 1,
+        false
+    )
+    if not lines then return nil end
+    local original = nil
+    if edit.range.start.line == edit.range["end"].line then
+        original = string.sub(lines[1], edit.range.start.character + 1, edit.range["end"].character)
+    else
+        lines[1] = string.sub(lines[1], edit.range.start.character + 1)
+        lines[#lines] = string.sub(lines[#lines], 1, edit.range["end"].character)
+        original = table.concat(lines, "\n")
+    end
+    -- Special case: empty, zero-width insertion (insert new line or text at new line)
+    if original == "" and edit.range.start.line == edit.range["end"].line
+        and edit.range.start.character == 0 and edit.range["end"].character == 0 then
+        if edit.range.start.line > 0 then
+            local above = vim.api.nvim_buf_get_lines(bufnr, edit.range.start.line - 1, edit.range.start.line, false)[1]
+            return above or ""
+        end
+    end
+    return original
+end
+
+--- Recalls (re-shows) the last NES suggestion if still in the same buffer
+function M.recall_last_suggestion()
+    local history = nes_recent_suggestions
+    if #history == 0 then
+        vim.notify("No NES suggestion to recall.", vim.log.levels.INFO)
+        return
+    end
+    local current_buf = vim.api.nvim_get_current_buf()
+    -- Find next applicable suggestion cycling through history
+    local start_idx = nes_recall_index or 1
+    local idx = start_idx
+    local tried = 0
+    while tried < #history do
+        local candidate = history[idx]
+        if candidate and candidate.bufnr == current_buf then
+            -- Get current text at suggestion's edit range
+            local candidate_edit = candidate.edits[1]
+            local current_text = get_buffer_text_at_edit(candidate_edit, current_buf)
+            -- Only recall if content has not changed
+            if current_text == candidate.original_text then
+                -- vim.notify("[NES Recall Debug] idx=" .. idx .. " payload:\n" .. vim.inspect(candidate), vim.log.levels.INFO)
+                nes_recall_index = idx % #history + 1
+                local ns_id = vim.api.nvim_create_namespace("copilotlsp.nes")
+                nes_ui._display_next_suggestion(candidate.bufnr, ns_id, vim.deepcopy(candidate.edits))
+                return
+            else
+                -- If content has changed, remove from history
+                vim.notify("[NES Recall Debug] Removing history idx=" .. idx .. ": original content diverged\nOriginal: " .. (candidate.original_text or "nil") .. "\nCurrent: " .. (current_text or "nil"), vim.log.levels.INFO)
+                table.remove(history, idx)
+                -- Don't increment idx, just try new entry at this index
+                if idx > #history then idx = 1 end
+            end
+        else
+            idx = idx % #history + 1
+        end
+        tried = tried + 1
+    end
+    vim.notify("No NES suggestion to recall in this buffer.", vim.log.levels.INFO)
+end
+
 ---@param err lsp.ResponseError?
 ---@param result copilotlsp.copilotInlineEditResponse
 ---@param ctx lsp.HandlerContext
@@ -22,6 +94,26 @@ local function handle_nes_response(err, result, ctx)
         --- Convert to textEdit fields
         edit.newText = edit.text
     end
+
+    -- Only add suggestions with non-empty edits to FIFO recall history
+    if result.edits and #result.edits > 0 then
+        -- Extract and store the original content at the replaced range for the first edit
+        local edit = result.edits[1]
+        local bufnr = ctx.bufnr
+        local original_text = get_buffer_text_at_edit(edit, bufnr)
+        local history = nes_recent_suggestions
+        table.insert(history, 1, {
+            edits = vim.deepcopy(result.edits),
+            bufnr = ctx.bufnr,
+            context = vim.deepcopy(ctx),
+            original_text = original_text,
+        })
+        while #history > nes_recent_history_depth do
+            table.remove(history, #history)
+        end
+        nes_recall_index = nil  -- Reset recall-cycle index
+    end
+
     nes_ui._display_next_suggestion(ctx.bufnr, nes_ns, result.edits)
 end
 
